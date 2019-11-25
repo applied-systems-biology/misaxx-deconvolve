@@ -179,6 +179,6 @@ void deconvolve_task::work() {
     }
 
     cv::images::grayscale32f deconvolved = fftunpad(ifft(X), target_size, access_convolved.get().size());
-    clamp(deconvolved);
+//    clamp(deconvolved);
     module_interface->m_output_deconvolved.write(deconvolved);
 }
