@@ -19,6 +19,27 @@ namespace cv::images {
 }
 
 namespace {
+
+    cv::images::grayscale32f get_as_grayscale_float_copy(const cv::Mat &img) {
+        if (img.type() == CV_32F) {
+            return img.clone();
+        } else if (img.type() == CV_64F) {
+            cv::images::grayscale32f result;
+            img.convertTo(result, CV_32F, 1);
+            return result;
+        } else if (img.type() == CV_8U) {
+            cv::images::grayscale32f result;
+            img.convertTo(result, CV_32F, 1.0 / 255.0);
+            return result;
+        } else if (img.type() == CV_16U) {
+            cv::images::grayscale32f result;
+            img.convertTo(result, CV_32F, 1.0 / std::numeric_limits<ushort>::max());
+            return result;
+        } else {
+            throw std::runtime_error("Unsupported image depth: " + std::to_string(img.type()));
+        }
+    }
+
     cv::Size get_fft_size(const cv::Mat &img, const cv::Mat &kernel) {
         return cv::Size(img.size().width + kernel.size().width - 1,
                         img.size().height + kernel.size().height - 1);
@@ -26,16 +47,26 @@ namespace {
 
     cv::images::grayscale32f
     fftunpad(const cv::images::grayscale32f &deconvolved, const cv::Size &target_size, const cv::Size &source_size) {
-        int bleft = deconvolved.size().width / 2 - source_size.width / 2;
-        int btop = deconvolved.size().height / 2 - source_size.height / 2;
+        cv::Size ap{};
+        if (source_size.width % 2 == 0)
+            ap.width = 1;
+        if (source_size.height % 2 == 0)
+            ap.height = 1;
+//        cv::Size fftOptPad = get_fftoptpad(source_size, target_size);
+        int padded_width = deconvolved.size().width;
+        int padded_height = deconvolved.size().height;
+
+        int bleft = (padded_width - source_size.width - ap.width) / 2;
+        int btop = (padded_height - source_size.height - ap.height) / 2;
         cv::Rect roi{bleft, btop, source_size.width, source_size.height};
         cv::images::grayscale32f result{source_size, 0};
         deconvolved(roi).copyTo(result);
         return result;
     }
 
-    cv::images::grayscale32f
-    fftpad(const cv::images::grayscale32f &img, const cv::Size &target_size, bool shift = false) {
+
+
+    cv::images::grayscale32f fftpad(const cv::images::grayscale32f &img, const cv::Size &target_size, bool shift = false) {
         cv::Size ap{};
         if (img.size().width % 2 == 0)
             ap.width = 1;
@@ -58,9 +89,18 @@ namespace {
             int optimalWidth = cv::getOptimalDFTSize(currentWidth);
             int optimalHeight = cv::getOptimalDFTSize(currentHeight);
 
+            int dow = optimalWidth - currentWidth;
+            int doh = optimalHeight - currentHeight;
+            int ow0 = dow / 2;
+            int ow1 = dow - ow0;
+            int oh0 = doh / 2;
+            int oh1 = doh - oh0;
+
             // Add to padding
-            bright += optimalWidth - currentWidth;
-            bbottom += optimalHeight - currentHeight;
+            bleft += ow0;
+            btop += oh0;
+            bright += ow1;
+            bbottom += oh1;
         }
 
         cv::images::grayscale32f padded = img;
@@ -68,18 +108,11 @@ namespace {
 
 
         if (shift) {
-            const int sx = padded.size().width / 2;
-            const int sy = padded.size().height / 2;
-            cv::Rect A{0, 0, sx, sy};
-            cv::Rect B{sx, 0, sx, sy};
-            cv::Rect C{0, sy, sx, sy};
-            cv::Rect D{sx, sy, sx, sy};
-
-            auto src = padded.clone();
-            src(A).copyTo(padded(D));
-            src(B).copyTo(padded(C));
-            src(C).copyTo(padded(B));
-            src(D).copyTo(padded(A));
+            cv::images::grayscale32f tmp {};
+            cv::repeat(padded, 2, 2, tmp);
+            int sx = padded.cols;
+            int sy = padded.rows;
+            padded = tmp(cv::Rect(sx / 2, sy / 2, sx, sy));
         }
 
         return padded;
@@ -91,34 +124,9 @@ namespace {
         return result;
     }
 
-    void normalize(cv::images::grayscale32f &img) {
-        double vmin = 0;
-        double vmax = 0;
-        cv::minMaxLoc(img, &vmin, &vmax);
-
-        for (int y = 0; y < img.rows; ++y) {
-            float *row = img[y];
-            for (int x = 0; x < img.cols; ++x) {
-                row[x] = static_cast<float>((row[x] - vmin) / (vmax - vmin));
-            }
-        }
-    }
-
-    void clamp(cv::images::grayscale32f &img) {
-        for (int y = 0; y < img.rows; ++y) {
-            float *row = img[y];
-            for (int x = 0; x < img.cols; ++x) {
-                row[x] = std::min(std::max(row[x], 0.0f), 1.0f);
-            }
-        }
-    }
-
     cv::images::grayscale32f ifft(const cv::images::complex &fft) {
         cv::images::grayscale32f result{fft.size(), 0};
-        cv::images::complex tmp{fft.size(), 0};
-        cv::dft(fft, tmp, cv::DFT_REAL_OUTPUT | cv::DFT_SCALE);
-        cv::mixChannels({tmp}, {result}, {0, 0});
-        cv::flip(result.clone(), result, -1);
+        cv::idft(fft, result, cv::DFT_REAL_OUTPUT | cv::DFT_SCALE);
         return result;
     }
 
@@ -133,28 +141,27 @@ namespace {
         return result;
     }
 
-    cv::images::complex get_laplacian_fft(const cv::Size& unopt_target_size, const cv::Size &target_size) {
-        cv::Size quadrant_size{target_size.width / 2 - 1, target_size.height / 2 - 1};
+    cv::images::complex get_laplacian_fft(const cv::Size &target_size, const cv::Point &nudge = cv::Point()) {
+        cv::Size quadrant_size{target_size.width / 2 + 1, target_size.height / 2 + 1};
 
         cv::images::complex quadrant{quadrant_size, cv::Vec2f(0, 0)};
         for (int y = 0; y < quadrant.rows; ++y) {
             cv::Vec2f *row = quadrant[y];
-            const float wy = M_PI * y / quadrant_size.height;
+            const float wy = M_PI * (y + nudge.y) / (target_size.height / 2.0f);
             for (int x = 0; x < quadrant.cols; ++x) {
-                const float wx = M_PI * x / quadrant_size.width;
-                row[x] = cv::Vec2f(wx * wx + wy * wy, 0);
+                const float wx = M_PI * (x + nudge.x) / (target_size.width / 2.0f);
+                row[x] = cv::Vec2f(wx * wx + wy * wy, std::numeric_limits<float>::epsilon());
             }
         }
 
         cv::images::complex result{target_size, cv::Vec2f(0, 0)};
 
-        cv::Size nudge {0, 0};
         cv::copyMakeBorder(quadrant,
                            result,
-                           nudge.height,
-                           target_size.height - quadrant_size.height + nudge.height,
-                           nudge.width,
-                           target_size.width - quadrant_size.width + nudge.width,
+                           0,
+                           target_size.height - quadrant_size.height,
+                           0,
+                           target_size.width - quadrant_size.width,
                            cv::BORDER_REFLECT);
 
         return result;
@@ -183,37 +190,50 @@ namespace {
         return std::sqrt(a[0] * a[0] + a[1] * a[1]);
     }
 
-    void visualize_fft(const cv::images::complex &fft) {
-        cv::images::grayscale32f visualization {fft.size(), 0};
-        for(int y = 0; y < visualization.rows; ++y) {
-            const cv::Vec2f *rFFT = fft[y];
-            float *rVis = visualization[y];
-            for(int x = 0; x < visualization.cols; ++x) {
-                rVis[x] = complex_abs(rFFT[x]);
-            }
-        }
+    void save_fftreal(const cv::images::complex &fft, const std::string &file) {
+        cv::images::grayscale32f result{fft.size(), 0};
+        cv::mixChannels({fft}, {result}, {0, 0});
+        misaxx::imaging::utils::tiffwrite(result, file);
     }
+
+    void save_fftimag(const cv::images::complex &fft, const std::string &file) {
+        cv::images::grayscale32f result{fft.size(), 0};
+        cv::mixChannels({fft}, {result}, {1, 0});
+        misaxx::imaging::utils::tiffwrite(result, file);
+    }
+
 }
 
 void deconvolve_task::work() {
+
     auto module_interface = get_module_as<misaxx_deconvolve::module_interface>();
     auto access_convolved = module_interface->m_output_convolved.access_readonly();
     auto access_psf = module_interface->m_input_psf.access_readonly();
 
     const float rif_lambda = 0.001f;
 
-    cv::Size target_size = get_fft_size(access_convolved.get(), access_psf.get());
-    cv::images::complex H = fft(fftpad(access_psf.get(), target_size, true));
-    cv::images::complex Y = fft(fftpad(access_convolved.get(), target_size));
-    cv::images::complex L = get_laplacian_fft(target_size, Y.size());
-    cv::images::complex X{H.size(), 0};
+//    {
+//        cv::Mat abcd = get_as_grayscale_float_copy(misaxx::imaging::utils::tiffread("/home/ruman/abcd.tif"));
+//        abcd = fftpad(abcd, abcd.size(), true);
+//        misaxx::imaging::utils::tiffwrite(abcd, "/home/ruman/abcd_cv.tif");
+//        std::terminate();
+//    }
 
-    for (int y = 0; y < Y.rows; ++y) {
+    cv::Size target_size = get_fft_size(access_convolved.get(), access_psf.get());
+
+    cv::images::complex Y = fft(fftpad(access_convolved.get(), target_size));
+    cv::images::complex H = fft(fftpad(access_psf.get(), target_size, true));
+//    cv::images::complex L = fft(fftpad(get_laplacian8_kernel(), target_size, true));
+
+    cv::images::complex L = get_laplacian_fft(H.size());
+    cv::images::complex X{Y.size(), cv::Vec2f(0, 0)};
+
+    for(int y = 0; y < Y.rows; ++y) {
         const cv::Vec2f *rH = H[y];
         const cv::Vec2f *rY = Y[y];
         const cv::Vec2f *rL = L[y];
         cv::Vec2f *rX = X[y];
-        for (int x = 0; x < Y.cols; ++x) {
+        for(int x = 0; x < Y.cols; ++x) {
             const cv::Vec2f H2 = complex_mul(rH[x], rH[x]);
             const cv::Vec2f L2 = scalar_mul(complex_mul(rL[x], rL[x]), rif_lambda);
             const cv::Vec2f FA = complex_add(H2, L2);
@@ -224,6 +244,7 @@ void deconvolve_task::work() {
     }
 
     cv::images::grayscale32f deconvolved = fftunpad(ifft(X), target_size, access_convolved.get().size());
-//    clamp(deconvolved);
     module_interface->m_output_deconvolved.write(deconvolved);
+
+
 }
