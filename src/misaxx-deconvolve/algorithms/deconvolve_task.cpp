@@ -91,9 +91,9 @@ namespace {
 
             int dow = optimalWidth - currentWidth;
             int doh = optimalHeight - currentHeight;
-            int ow0 = dow / 2;
+            int ow0 = dow / 2 + 1;
             int ow1 = dow - ow0;
-            int oh0 = doh / 2;
+            int oh0 = doh / 2 + 1;
             int oh1 = doh - oh0;
 
             // Add to padding
