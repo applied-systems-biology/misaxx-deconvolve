@@ -36,10 +36,10 @@ See the LICENSE file provided with the code for the full license.
 
 MISA++ Kidney Glomeruli Segmentation depends on following libraries:
 
-| Library                    | Version | Author      | URL |
-| -------------------------- | ------- | ----------- | --- |
-| MISA++ Core                | 1.0.0   | Ruman Gerst |     |
-| MISA++ Tissue Segmentation | 1.0.0   | Ruman Gerst |     |
+| Library        | Version | Author      | URL |
+| -------------- | ------- | ----------- | --- |
+| MISA++ Core    | 1.0.0   | Ruman Gerst |     |
+| MISA++ Imaging | 1.0.0   | Ruman Gerst |     |
 
 You need a compiler capable of C++ version 2017 or higher to compile MISA++ Imaging.
 
