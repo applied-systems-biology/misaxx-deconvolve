@@ -18,7 +18,7 @@ misaxx::misa_module_info misaxx_deconvolve::module_info() {
     misaxx::misa_module_info info;
     info.set_id("misaxx-deconvolve");
     info.set_version("1.0.0");
-    info.set_name("misaxx-deconvolve");
+    info.set_name("MISA++ Simulated Deconvolution");
     info.set_description("Deconvolution example");
     info.add_author("Ruman Gerst");
     info.set_license("BSD-2-Clause");
